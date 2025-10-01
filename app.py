@@ -1,169 +1,147 @@
-from flask import Flask, request, render_template, jsonify, send_from_directory
 import os
 import re
 import json
 import tempfile
+from flask import Flask, request, render_template, send_from_directory
+import pytesseract
+from PIL import Image
 import google.generativeai as genai
 
-try:
-    from PIL import Image
-    import pytesseract
-    TESSERACT_AVAILABLE = True
-except Exception:
-    TESSERACT_AVAILABLE = False
-
+# ==========================
+# Flask App Setup
+# ==========================
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'sample_reports'
 
-GEMINI_API_KEY = "AIzaSyBS0st-Ripk7WnpZNSAmQHvv5e5e2RDuYA"
+# Gemini API Key
+
+GEMINI_API_KEY = "Your_Api_Key"
 genai.configure(api_key=GEMINI_API_KEY)
 
-DEFAULT_REF_RANGES = {
-    "Hemoglobin": {"unit": "g/dL", "low": 12.0, "high": 15.0},
-    "WBC": {"unit": "/uL", "low": 4000, "high": 11000},
-    "Platelets": {"unit": "/uL", "low": 150000, "high": 450000},
-}
+# OCR Function
 
 def ocr_from_image_file(file_stream):
-    if not TESSERACT_AVAILABLE:
-        raise RuntimeError("Install pillow + pytesseract + Tesseract engine for OCR")
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-        tmp.write(file_stream.read())
-        tmp_path = tmp.name
+    """Extract text from image using Tesseract OCR with preprocessing."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
+        temp_file.write(file_stream.read())
+        temp_path = temp_file.name
+
     try:
-        img = Image.open(tmp_path)
-        img = img.convert("L")
-        img = img.point(lambda x: 0 if x < 140 else 255)
-        img = img.resize((img.width*2, img.height*2), Image.LANCZOS)
-        text = pytesseract.image_to_string(img, config="--psm 6")
-        return text
+        image = Image.open(temp_path).convert("L")
+        threshold = 140
+        image = image.point(lambda p: 255 if p > threshold else 0)
+        image = image.resize((image.width * 2, image.height * 2))
+        text = pytesseract.image_to_string(image, config="--psm 6")
+    except Exception as e:
+        print("OCR error:", e)
+        text = ""
     finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+        os.remove(temp_path)
 
-def extract_tests_local(text):
-    text = text.replace("Hemglobin", "Hemoglobin").replace("Hbg", "Hemoglobin").replace("Hgh", "High")
-    lines = []
-    for part in re.split(r'[\n,;]+', text):
-        part = part.strip()
-        if part and re.search(r'\d', part):
-            lines.append(part)
-    confidence = min(0.95, 0.5 + len(lines)/10)
-    return {"tests_raw": lines, "confidence": round(confidence,2)}
+    return text
 
-def normalize_tests(tests_raw):
-    normalized = []
-    for test in tests_raw:
-        match = re.match(r"([A-Za-z ]+)\s*[:\-]?\s*([\d,\.]+)\s*([^\s\(,]*)\s*\(?([A-Za-z]*)\)?", test)
-        if match:
-            name = match.group(1).strip()
-            val_str = match.group(2).replace(",", "")
-            try:
-                value = float(val_str)
-            except:
-                value = None
-            unit = match.group(3) or ""
-            status = (match.group(4).lower() if match.group(4) else "normal")
-            ref = DEFAULT_REF_RANGES.get(name, {"low": None, "high": None, "unit": unit})
-            if status == "normal" and value is not None and ref["low"] and ref["high"]:
-                if value < ref["low"]:
-                    status = "low"
-                elif value > ref["high"]:
-                    status = "high"
-            normalized.append({
-                "name": name,
-                "value": value,
-                "unit": ref["unit"],
-                "status": status,
-                "ref_range": {"low": ref["low"], "high": ref["high"]}
-            })
-    normalization_confidence = round(0.7 + len(normalized)/10, 2)
-    return {"tests": normalized, "normalization_confidence": normalization_confidence}
+# Safe JSON Parsing
 
-def generate_summary_gemini(normalized_tests, temperature=0.7):
-    tests_text = "\n".join([f"{t['name']} ({t['value']} {t['unit']}): {t['status']}" for t in normalized_tests])
-    prompt = f"""
-    You are a careful medical text processor.
-    Input:
-    {tests_text}
+def safe_json_loads(text):
+    """Extract and safely load JSON from LLM output."""
+    try:
+        matches = re.findall(r"\{.*\}", text, re.DOTALL)
+        if not matches:
+            return {"status": "unprocessed", "reason": "No valid JSON generated"}
+        raw = max(matches, key=len)
+        raw = re.sub(r",\s*([\]}])", r"\1", raw)  # remove trailing commas
+        return json.loads(raw)
+    except Exception as e:
+        print("JSON parse error:", e)
+        return {"status": "unprocessed", "reason": "Invalid JSON from model"}
 
-    Generate a JSON ONLY output with:
-    {{
-      "summary": "Patient-friendly summary (no diagnosis)",
-      "explanations": ["Short explanation of each abnormal test"]
-    }}
+
+# Gemini Processing
+
+def generate_summary_gemini(extracted_text, temperature=0.3):
     """
+    Feed OCR/text to Gemini for parsing, normalization, and patient-friendly summary.
+    Explanations are short and calm for ALL tests, summary is shorter.
+    """
+    prompt = f"""
+You are a medical text simplifier.
+Input medical report text:
+{extracted_text}
+
+Steps:
+1. Extract all tests, values, units, and status (low/normal/high).
+2. If ranges are present, include them; otherwise leave null.
+3. Generate explanations for ALL tests, each ≤18 words, calm and patient-friendly.
+4. Generate a very short summary (≤20 words) combining key points.
+5. Return a confidence score (0.0–1.0) for extraction and normalization.
+
+Output ONLY valid JSON:
+{{
+  "tests_raw": ["list of raw extracted test lines"],
+  "confidence": 0.82,
+  "tests": [
+    {{"name":"Hemoglobin","value":10.2,"unit":"g/dL","status":"low","ref_range":{{"low":12.0,"high":15.0}}}},
+    {{"name":"WBC","value":11200,"unit":"/uL","status":"high","ref_range":{{"low":4000,"high":11000}}}}
+  ],
+  "normalization_confidence": 0.84,
+  "explanations": [
+    "Hemoglobin is slightly low, linked to low blood levels.",
+    "White blood cells are high, suggesting body defense activity."
+  ],
+  "summary": "Low hemoglobin and high WBC detected.",
+  "status": "ok"
+}}
+"""
+
     try:
         model = genai.GenerativeModel("gemini-2.5-flash")
-        response = model.generate_content(
-            [{"role": "user", "parts": [prompt]}],
-            generation_config=genai.types.GenerationConfig(temperature=temperature, top_k=1)
-        )
-        text = response.text.strip()
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        else:
-            return {"summary": "Error generating summary", "explanations": []}
+        response = model.generate_content(prompt, generation_config=genai.types.GenerationConfig(
+            temperature=temperature, top_k=1
+        ))
+        return safe_json_loads(response.text.strip())
     except Exception as e:
         print("Gemini error:", e)
-        return {"summary": "Error generating summary", "explanations": []}
+        return {"status": "unprocessed", "reason": "Gemini processing error"}
 
-def validate_no_hallucination(parsed_json, tests_raw):
-    raw_join = " ".join(tests_raw).lower()
-    normalized = parsed_json.get("tests", [])
-    for t in normalized:
-        name = t.get("name", "").lower()
-        if name not in raw_join:
-            return False, f"hallucinated test '{t.get('name')}' not present in input"
-    return True, ""
+
+# Routes
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     final_output = {}
     uploaded_file_name = ""
+
     if request.method == "POST":
         file = request.files.get("report")
         if file and file.filename:
             uploaded_file_name = file.filename.lower()
             extracted_text = ""
+
             try:
-                if uploaded_file_name.endswith((".png",".jpg",".jpeg",".tiff",".bmp")):
+                if uploaded_file_name.endswith((".png", ".jpg", ".jpeg", ".tiff", ".bmp")):
                     file.stream.seek(0)
                     extracted_text = ocr_from_image_file(file.stream)
                 else:
                     file.stream.seek(0)
                     extracted_text = file.stream.read().decode("utf-8", errors="ignore")
             except Exception as e:
-                extracted_text = file.stream.read().decode("utf-8", errors="ignore")
-                print("OCR fallback:", e)
+                print("OCR/Text read fallback:", e)
+                extracted_text = ""
 
-            if not extracted_text or not re.search(r'\d', extracted_text):
-                final_output = {"status": "unprocessed", "reason": "No valid tests found"}
+            if not extracted_text.strip():
+                final_output = {"status": "unprocessed", "reason": "No valid text found"}
             else:
-                extracted = extract_tests_local(extracted_text)
-                normalized = normalize_tests(extracted["tests_raw"])
-                summary = generate_summary_gemini(normalized["tests"])
-                final_output = {
-                    "tests_raw": extracted["tests_raw"],
-                    "confidence": extracted["confidence"],
-                    "tests": normalized["tests"],
-                    "normalization_confidence": normalized["normalization_confidence"],
-                    "summary": summary.get("summary", ""),
-                    "explanations": summary.get("explanations", []),
-                    "status": "ok"
-                }
-                ok, reason = validate_no_hallucination(final_output, extracted["tests_raw"])
-                if not ok:
-                    final_output = {"status": "unprocessed", "reason": reason}
+                gemini_output = generate_summary_gemini(extracted_text)
+                final_output = gemini_output
 
     return render_template("index.html", final_output=final_output, filename=uploaded_file_name)
 
-@app.route('/sample_reports/<filename>')
+@app.route("/sample_reports/<filename>")
 def download_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
+
+# Run App
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000, debug=True)
