@@ -117,46 +117,5 @@ curl -X POST http://localhost:8000/ -F "report=@sample_reports/sample_report.txt
 }
 ```
 
-## Postman Testing
-
-1. Create a **POST request** to `http://localhost:8000/`
-2. Key: `report` → attach file
-3. Send → receive JSON response
-
-## Sample Reports
-
-Place reports in `sample_reports/`:
-
-```
-sample_reports/
-├── sample_report.txt
-├── sample_report2.png
-```
-
-* Text example:
-
-```
-CBC: Hemoglobin 10.2 g/dL (Low)
-WBC 11200 /uL (High)
-Platelets 200000 /uL (Normal)
-```
-
-* Image reports can be screenshots or scanned PDFs converted to images.
-
-<<<<<<< HEAD
-
-=======
->>>>>>> dc89a1cc56f09cbc01ff27e15e92e6717336ad0d
-
-## Folder Structure
-
-```
-ai-medical-report-simplifier/
-├── app.py
-├── templates/index.html
-├── sample_reports/sample_report.txt
-├── requirements.txt
-├── README.md
-```
 
 
