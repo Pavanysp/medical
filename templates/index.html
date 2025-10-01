@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Medical Report Simplifier</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        <h1>AI Medical Report Simplifier</h1>
+
+        <form method="POST" enctype="multipart/form-data">
+            <label>Select a medical report</label><br>
+            <input type="file" name="report" required>
+            <button type="submit">Simplify</button>
+        </form>
+
+        {% if final_output %} {% if final_output.status == 'ok' %}
+        <h2>Final Output for: {{ filename }}</h2>
+        <pre>{{ final_output | tojson(indent=2) }}</pre> {% else %}
+        <h2>Status: {{ final_output.status }}</h2>
+        <p>Reason: {{ final_output.reason }}</p>
+        {% endif %} {% endif %}
+
+
+    </div>
+</body>
+
+</html>
