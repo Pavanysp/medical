@@ -18,7 +18,7 @@ Supports **OCR** (pytesseract) and local extraction fallback.
 * AI explanations using Gemini API
 * Hallucination guardrail
 * Web interface for uploads and JSON output
-**Architecture Flow:** Input → OCR/Preprocessing → Test Extractio → Gemini Model  → Output (JSON + Web UI)
+## Architecture Flow:** Input → OCR/Preprocessing → Test Extractio → Gemini Model  → Output (JSON + Web UI) **
 
 
 
