@@ -19,11 +19,7 @@ Supports **OCR** (pytesseract) and local extraction fallback.
 * Hallucination guardrail
 * Web interface for uploads and JSON output
 
-## Architecture
 
-```
-[Report (Text/Image)] --> [Flask API] --> [OCR/Extraction] --> [Normalization] --> [Gemini AI] --> [JSON Output]
-```
 
 ## Requirements
 
@@ -37,15 +33,14 @@ Supports **OCR** (pytesseract) and local extraction fallback.
 ## Installation
 
 ```bash
-git clone https://github.com/<username>/ai-medical-report-simplifier.git
-cd ai-medical-report-simplifier
-python -m venv venv
+git clone https://github.com/Pavanysp/medical.git
+cd medical
 # Activate venv:
 # Windows
-venv\Scripts\activate
+final_venv\Scripts\activate
 # Linux/Mac
-source venv/bin/activate
-pip install -r requirements.txt
+source final_venv/bin/activate
+
 ```
 
 Set your Gemini API key in `app.py`:
